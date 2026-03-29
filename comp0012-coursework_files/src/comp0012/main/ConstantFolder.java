@@ -1,4 +1,5 @@
 package comp0012.main;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -56,73 +57,74 @@ import org.apache.bcel.util.InstructionFinder;
 import org.apache.bcel.generic.MethodGen;
 import org.apache.bcel.generic.TargetLostException;
 
-
-
-public class ConstantFolder
-{
+public class ConstantFolder {
 	ClassParser parser = null;
 	ClassGen gen = null;
 
 	JavaClass original = null;
 	JavaClass optimized = null;
 
-	public ConstantFolder(String classFilePath)
-	{
-		try{
+	public ConstantFolder(String classFilePath) {
+		try {
 			this.parser = new ClassParser(classFilePath);
 			this.original = this.parser.parse();
 			this.gen = new ClassGen(this.original);
-		} catch(IOException e){
+		} catch (IOException e) {
 			e.printStackTrace();
 		}
 	}
-	
-    public void optimize() {
+
+	public void optimize() {
 		ClassGen cgen = new ClassGen(original);
-        ConstantPoolGen cpgen = cgen.getConstantPool();
+		ConstantPoolGen cpgen = cgen.getConstantPool();
 		cgen.setMajor(50);
 
-        for (Method m : cgen.getMethods()) {
-            if (m.isAbstract() || m.isNative() || m.getCode() == null) continue;
+		for (Method m : cgen.getMethods()) {
+			if (m.isAbstract() || m.isNative() || m.getCode() == null)
+				continue;
 
-            MethodGen mg = new MethodGen(m, cgen.getClassName(), cpgen);
-            InstructionList il = mg.getInstructionList();
-            if (il == null) continue;
+			MethodGen mg = new MethodGen(m, cgen.getClassName(), cpgen);
+			InstructionList il = mg.getInstructionList();
+			if (il == null)
+				continue;
 
-            boolean changed;
-            int rounds = 0;
+			boolean changed;
+			int rounds = 0;
 
-            do {
-                changed = false;
-                rounds++;
+			do {
+				changed = false;
+				rounds++;
 
-				// Part1: simple folding 
+				// Part1: simple folding
 				changed |= foldNumericConversions(il, cpgen);
-                changed |= foldNumeric(il, cpgen);
+				changed |= foldNumeric(il, cpgen);
 
-                // Part2: constant variables across whole method
-                changed |= propagateConstantVariables(il, cpgen);
+				// Part2: constant variables across whole method
+				changed |= propagateConstantVariables(il, cpgen);
 
-                // Part3: dynamic variables within intervals
-                changed |= propagateDynamicVariables(il, cpgen);
+				// Part3: dynamic variables within intervals
+				changed |= propagateDynamicVariables(il, cpgen);
 
-                // Part4: extra peephole 
-                changed |= part4Peephole(il, cpgen); //change the name as you want
+				// Part4: extra peephole
+				changed |= removeOverwrittenStores(il, cpgen);
 				changed |= removeDeadStores(il, cpgen);
 
-                if (rounds > 50) break; // development safety net
-            } while (changed);
+				if (rounds > 50)
+					break; // development safety net
+			} while (changed);
 
 			mg.removeNOPs();
-            mg.removeCodeAttributes();
-            mg.setMaxStack();
-            mg.setMaxLocals();
-            
-            cgen.replaceMethod(m, mg.getMethod());
-        }
+			mg.removeLocalVariables();
+			mg.removeLineNumbers();
+			mg.removeCodeAttributes();
+			mg.setMaxStack();
+			mg.setMaxLocals();
 
-        this.optimized = cgen.getJavaClass();
-    }
+			cgen.replaceMethod(m, mg.getMethod());
+		}
+
+		this.optimized = cgen.getJavaClass();
+	}
 
 	// Part1
 	private boolean foldNumericConversions(InstructionList il, ConstantPoolGen cpgen) {
@@ -134,10 +136,12 @@ public class ConstantFolder
 
 			for (InstructionHandle h1 = il.getStart(); h1 != null; h1 = h1.getNext()) {
 				InstructionHandle h2 = h1.getNext();
-				if (h2 == null) break;
+				if (h2 == null)
+					break;
 
 				Instruction conv = h2.getInstruction();
-				if (!(conv instanceof ConversionInstruction)) continue;
+				if (!(conv instanceof ConversionInstruction))
+					continue;
 
 				// ---------- int -> (long/float/double) ----------
 				if (conv instanceof I2L) {
@@ -227,7 +231,7 @@ public class ConstantFolder
 
 		return changed;
 	}
-	
+
 	private boolean foldNumeric(InstructionList il, ConstantPoolGen cpgen) {
 		boolean changed = false;
 
@@ -237,12 +241,15 @@ public class ConstantFolder
 
 			for (InstructionHandle h1 = il.getStart(); h1 != null; h1 = h1.getNext()) {
 				InstructionHandle h2 = h1.getNext();
-				if (h2 == null) break;
+				if (h2 == null)
+					break;
 				InstructionHandle h3 = h2.getNext();
-				if (h3 == null) break;
+				if (h3 == null)
+					break;
 
 				Instruction op = h3.getInstruction();
-				if (!(op instanceof ArithmeticInstruction)) continue;
+				if (!(op instanceof ArithmeticInstruction))
+					continue;
 
 				// Try int
 				Integer i1 = getPushedIntConstant(h1, cpgen);
@@ -305,8 +312,8 @@ public class ConstantFolder
 	}
 
 	private boolean replace2WithPush(InstructionList il, ConstantPoolGen cpgen,
-									InstructionHandle h1, InstructionHandle h2,
-									Number value) {
+			InstructionHandle h1, InstructionHandle h2,
+			Number value) {
 		try {
 			h1.setInstruction(new PUSH(cpgen, value).getInstruction());
 			il.delete(h2);
@@ -318,8 +325,8 @@ public class ConstantFolder
 	}
 
 	private boolean replace3WithPush(InstructionList il, ConstantPoolGen cpgen,
-									InstructionHandle h1, InstructionHandle h2, InstructionHandle h3,
-									Number value) {
+			InstructionHandle h1, InstructionHandle h2, InstructionHandle h3,
+			Number value) {
 		try {
 			h1.setInstruction(new PUSH(cpgen, value).getInstruction());
 			il.delete(h2, h3);
@@ -334,18 +341,23 @@ public class ConstantFolder
 		InstructionHandle[] lost = e.getTargets();
 		for (InstructionHandle t : lost) {
 			InstructionTargeter[] targeters = t.getTargeters();
-			if (targeters == null) continue;
+			if (targeters == null)
+				continue;
 			for (InstructionTargeter it : targeters) {
 				it.updateTarget(t, newTarget);
 			}
 		}
 	}
-	//int helpers
+
+	// int helpers
 	private Integer getPushedIntConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
-		if (inst instanceof ICONST) return ((ICONST) inst).getValue().intValue();
-		if (inst instanceof BIPUSH) return ((BIPUSH) inst).getValue().intValue();
-		if (inst instanceof SIPUSH) return ((SIPUSH) inst).getValue().intValue();
+		if (inst instanceof ICONST)
+			return ((ICONST) inst).getValue().intValue();
+		if (inst instanceof BIPUSH)
+			return ((BIPUSH) inst).getValue().intValue();
+		if (inst instanceof SIPUSH)
+			return ((SIPUSH) inst).getValue().intValue();
 		if (inst instanceof LDC) {
 			Object v = ((LDC) inst).getValue(cpgen);
 			return (v instanceof Integer) ? (Integer) v : null;
@@ -355,23 +367,30 @@ public class ConstantFolder
 
 	private Integer evalIntBinary(int a, int b, Instruction op) {
 		switch (op.getOpcode()) {
-			case Constants.IADD: return a + b;
-			case Constants.ISUB: return a - b;
-			case Constants.IMUL: return a * b;
+			case Constants.IADD:
+				return a + b;
+			case Constants.ISUB:
+				return a - b;
+			case Constants.IMUL:
+				return a * b;
 			case Constants.IDIV:
-				if (b == 0) return null;
+				if (b == 0)
+					return null;
 				return a / b;
 			case Constants.IREM:
-				if (b == 0) return null;
+				if (b == 0)
+					return null;
 				return a % b;
-			default: return null;
+			default:
+				return null;
 		}
 	}
 
-	//long helpers 
+	// long helpers
 	private Long getPushedLongConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
-		if (inst instanceof LCONST) return ((LCONST) inst).getValue().longValue();
+		if (inst instanceof LCONST)
+			return ((LCONST) inst).getValue().longValue();
 		if (inst instanceof LDC2_W) {
 			Object v = ((LDC2_W) inst).getValue(cpgen);
 			return (v instanceof Long) ? (Long) v : null;
@@ -381,23 +400,30 @@ public class ConstantFolder
 
 	private Long evalLongBinary(long a, long b, Instruction op) {
 		switch (op.getOpcode()) {
-			case Constants.LADD: return a + b;
-			case Constants.LSUB: return a - b;
-			case Constants.LMUL: return a * b;
+			case Constants.LADD:
+				return a + b;
+			case Constants.LSUB:
+				return a - b;
+			case Constants.LMUL:
+				return a * b;
 			case Constants.LDIV:
-				if (b == 0L) return null;
+				if (b == 0L)
+					return null;
 				return a / b;
 			case Constants.LREM:
-				if (b == 0L) return null;
+				if (b == 0L)
+					return null;
 				return a % b;
-			default: return null;
+			default:
+				return null;
 		}
 	}
 
-	//float helpers
+	// float helpers
 	private Float getPushedFloatConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
-		if (inst instanceof FCONST) return ((FCONST) inst).getValue().floatValue();
+		if (inst instanceof FCONST)
+			return ((FCONST) inst).getValue().floatValue();
 		if (inst instanceof LDC) {
 			Object v = ((LDC) inst).getValue(cpgen);
 			return (v instanceof Float) ? (Float) v : null;
@@ -407,19 +433,26 @@ public class ConstantFolder
 
 	private Float evalFloatBinary(float a, float b, Instruction op) {
 		switch (op.getOpcode()) {
-			case Constants.FADD: return a + b;
-			case Constants.FSUB: return a - b;
-			case Constants.FMUL: return a * b;
-			case Constants.FDIV: return a / b; 
-			case Constants.FREM: return a % b; 
-			default: return null;
+			case Constants.FADD:
+				return a + b;
+			case Constants.FSUB:
+				return a - b;
+			case Constants.FMUL:
+				return a * b;
+			case Constants.FDIV:
+				return a / b;
+			case Constants.FREM:
+				return a % b;
+			default:
+				return null;
 		}
 	}
 
-	//double helpers
+	// double helpers
 	private Double getPushedDoubleConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
-		if (inst instanceof DCONST) return ((DCONST) inst).getValue().doubleValue();
+		if (inst instanceof DCONST)
+			return ((DCONST) inst).getValue().doubleValue();
 		if (inst instanceof LDC2_W) {
 			Object v = ((LDC2_W) inst).getValue(cpgen);
 			return (v instanceof Double) ? (Double) v : null;
@@ -429,23 +462,28 @@ public class ConstantFolder
 
 	private Double evalDoubleBinary(double a, double b, Instruction op) {
 		switch (op.getOpcode()) {
-			case Constants.DADD: return a + b;
-			case Constants.DSUB: return a - b;
-			case Constants.DMUL: return a * b;
-			case Constants.DDIV: return a / b; // Infinity/NaN ok
-			case Constants.DREM: return a % b;
-			default: return null;
+			case Constants.DADD:
+				return a + b;
+			case Constants.DSUB:
+				return a - b;
+			case Constants.DMUL:
+				return a * b;
+			case Constants.DDIV:
+				return a / b; // Infinity/NaN ok
+			case Constants.DREM:
+				return a % b;
+			default:
+				return null;
 		}
 	}
-
 
 	// part2
 	private boolean propagateConstantVariables(InstructionList il, ConstantPoolGen cpgen) {
 		boolean changed = false;
 
-		//Filter the variables that are loaded only once
-		HashMap<Integer, Integer> storeCount   = new HashMap<>();   
-    	HashMap<Integer, Number>  constantVars = new HashMap<>();  
+		// Filter the variables that are loaded only once
+		HashMap<Integer, Integer> storeCount = new HashMap<>();
+		HashMap<Integer, Number> constantVars = new HashMap<>();
 
 		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
 			Instruction inst = h.getInstruction();
@@ -482,7 +520,8 @@ public class ConstantFolder
 				it.remove();
 			}
 		}
-		if (constantVars.isEmpty()) return false;
+		if (constantVars.isEmpty())
+			return false;
 
 		// Replace loads of these variables with their constant values
 		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
@@ -502,36 +541,106 @@ public class ConstantFolder
 		}
 		return changed;
 	}
-	
+
 	// Helper
 	private Number getTypedConstant(InstructionHandle h, Instruction storeInst, ConstantPoolGen cpgen) {
-		if (storeInst instanceof ISTORE) return getPushedIntConstant(h, cpgen);
-		if (storeInst instanceof LSTORE) return getPushedLongConstant(h, cpgen);
-		if (storeInst instanceof FSTORE) return getPushedFloatConstant(h, cpgen);
-		if (storeInst instanceof DSTORE) return getPushedDoubleConstant(h, cpgen);
+		if (storeInst instanceof ISTORE)
+			return getPushedIntConstant(h, cpgen);
+		if (storeInst instanceof LSTORE)
+			return getPushedLongConstant(h, cpgen);
+		if (storeInst instanceof FSTORE)
+			return getPushedFloatConstant(h, cpgen);
+		if (storeInst instanceof DSTORE)
+			return getPushedDoubleConstant(h, cpgen);
 		return null;
 	}
 
 	private Instruction createTypedPush(ConstantPoolGen cpgen, Number value) {
-		if (value instanceof Integer) return new PUSH(cpgen, value.intValue()).getInstruction();
-		if (value instanceof Long)    return new PUSH(cpgen, value.longValue()).getInstruction();
-		if (value instanceof Float)   return new PUSH(cpgen, value.floatValue()).getInstruction();
-		if (value instanceof Double)  return new PUSH(cpgen, value.doubleValue()).getInstruction();
+		if (value instanceof Integer)
+			return new PUSH(cpgen, value.intValue()).getInstruction();
+		if (value instanceof Long)
+			return new PUSH(cpgen, value.longValue()).getInstruction();
+		if (value instanceof Float)
+			return new PUSH(cpgen, value.floatValue()).getInstruction();
+		if (value instanceof Double)
+			return new PUSH(cpgen, value.doubleValue()).getInstruction();
 		return null;
 	}
 
 	// part3
 	private boolean propagateDynamicVariables(InstructionList il, ConstantPoolGen cpgen) {
 		// Implement propagation of dynamic variables within intervals
-		// Example: if a variable is assigned a value and not changed within a certain interval, replace its usage with that value within that interval
+		// Example: if a variable is assigned a value and not changed within a certain
+		// interval, replace its usage with that value within that interval
 		return false; // Placeholder
 	}
 
 	// part4
-	private boolean part4Peephole(InstructionList il, ConstantPoolGen cpgen) {
-		// Implement extra peephole optimizations (safe ones)
-		// Example: remove redundant load/store pairs, simplify certain instruction patterns, etc.
-		return false; // Placeholder
+	private boolean removeOverwrittenStores(InstructionList il, ConstantPoolGen cpgen) {
+		boolean changed = false;
+
+		for (InstructionHandle h = il.getStart(); h != null;) {
+			InstructionHandle cur = h;
+			h = h.getNext();
+
+			Instruction inst = cur.getInstruction();
+			if (!(inst instanceof StoreInstruction) || (inst instanceof ASTORE))
+				continue;
+			if (isBranchTarget(cur))
+				continue;
+
+			int idx = ((StoreInstruction) inst).getIndex();
+			InstructionHandle scan = cur.getNext();
+			boolean overwritten = false;
+
+			while (scan != null) {
+				Instruction scanInstruction = scan.getInstruction();
+				if (isBranchTarget(scan))
+					break;
+				if (scanInstruction instanceof BranchInstruction || scanInstruction instanceof Select)
+					break;
+				if (scanInstruction instanceof LoadInstruction && !(scanInstruction instanceof ALOAD)
+						&& ((LoadInstruction) scanInstruction).getIndex() == idx) {
+					overwritten = false;
+					break;
+				}
+
+				if (scanInstruction instanceof StoreInstruction && !(scanInstruction instanceof ASTORE)
+						&& ((StoreInstruction) scanInstruction).getIndex() == idx) {
+					overwritten = true;
+					break;
+				}
+
+				if (scanInstruction instanceof IINC && ((IINC) scanInstruction).getIndex() == idx) {
+					overwritten = true;
+					break;
+				}
+
+				scan = scan.getNext();
+			}
+
+			if (!overwritten)
+				continue;
+
+			InstructionHandle prev = cur.getPrev();
+			if (prev == null)
+				continue;
+			if (isBranchTarget(prev))
+				continue;
+			if (!isSinglePushConstant(prev.getInstruction(), cpgen))
+				continue;
+
+			try {
+				il.delete(prev, cur);
+				changed = true;
+			} catch (TargetLostException e) {
+				InstructionHandle newTarget = (cur.getNext() != null) ? cur.getNext() : prev.getPrev();
+				if (newTarget != null)
+					retargetLostTargets(e, newTarget);
+				changed = true;
+			}
+		}
+		return changed;
 	}
 
 	private boolean removeDeadStores(InstructionList il, ConstantPoolGen cpgen) {
@@ -552,33 +661,40 @@ public class ConstantFolder
 		}
 
 		// Pass 2: delete dead stores where the value producer is a single const push
-		for (InstructionHandle h = il.getStart(); h != null; ) {
+		for (InstructionHandle h = il.getStart(); h != null;) {
 			InstructionHandle cur = h;
 			h = h.getNext(); // advance before delete
 
 			Instruction inst = cur.getInstruction();
-			if (!(inst instanceof StoreInstruction) || (inst instanceof ASTORE)) continue;
+			if (!(inst instanceof StoreInstruction) || (inst instanceof ASTORE))
+				continue;
 
 			int idx = ((StoreInstruction) inst).getIndex();
 
 			// Only remove stores to locals that are never read
-			if (loads.getOrDefault(idx, 0) != 0) continue;
+			if (loads.getOrDefault(idx, 0) != 0)
+				continue;
 
 			// Don't delete branch targets
-			if (isBranchTarget(cur)) continue;
+			if (isBranchTarget(cur))
+				continue;
 
 			InstructionHandle prev = cur.getPrev();
-			if (prev == null) continue;
-			if (isBranchTarget(prev)) continue;
+			if (prev == null)
+				continue;
+			if (isBranchTarget(prev))
+				continue;
 
-			if (!isSinglePushConstant(prev.getInstruction(), cpgen)) continue;
+			if (!isSinglePushConstant(prev.getInstruction(), cpgen))
+				continue;
 
 			try {
 				il.delete(prev, cur);
 				changed = true;
 			} catch (TargetLostException e) {
 				InstructionHandle newTarget = (cur.getNext() != null) ? cur.getNext() : prev.getPrev();
-				if (newTarget != null) retargetLostTargets(e, newTarget);
+				if (newTarget != null)
+					retargetLostTargets(e, newTarget);
 				changed = true;
 			}
 		}
@@ -588,23 +704,31 @@ public class ConstantFolder
 
 	private boolean isBranchTarget(InstructionHandle h) {
 		InstructionTargeter[] targeters = h.getTargeters();
-		if (targeters == null) return false;
+		if (targeters == null)
+			return false;
 
 		for (InstructionTargeter t : targeters) {
-			if (t instanceof BranchInstruction) return true;
-			if (t instanceof Select) return true; // switch targets
+			if (t instanceof BranchInstruction)
+				return true;
+			if (t instanceof Select)
+				return true; // switch targets
 		}
 		return false;
 	}
 
-	
 	private boolean isSinglePushConstant(Instruction inst, ConstantPoolGen cpgen) {
-		if (inst instanceof ICONST) return true;
-		if (inst instanceof BIPUSH) return true;
-		if (inst instanceof SIPUSH) return true;
-		if (inst instanceof LCONST) return true;
-		if (inst instanceof FCONST) return true;
-		if (inst instanceof DCONST) return true;
+		if (inst instanceof ICONST)
+			return true;
+		if (inst instanceof BIPUSH)
+			return true;
+		if (inst instanceof SIPUSH)
+			return true;
+		if (inst instanceof LCONST)
+			return true;
+		if (inst instanceof FCONST)
+			return true;
+		if (inst instanceof DCONST)
+			return true;
 
 		if (inst instanceof LDC) {
 			Object v = ((LDC) inst).getValue(cpgen);
@@ -617,9 +741,8 @@ public class ConstantFolder
 		return false;
 	}
 
-	//write
-	public void write(String optimisedFilePath)
-	{
+	// write
+	public void write(String optimisedFilePath) {
 		this.optimize();
 
 		try {
