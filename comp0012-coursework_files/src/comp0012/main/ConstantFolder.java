@@ -569,10 +569,76 @@ public class ConstantFolder {
 
 	// part3
 	private boolean propagateDynamicVariables(InstructionList il, ConstantPoolGen cpgen) {
-		// Implement propagation of dynamic variables within intervals
-		// Example: if a variable is assigned a value and not changed within a certain
-		// interval, replace its usage with that value within that interval
-		return false; // Placeholder
+		Map<Integer, Number> constantVars = new HashMap<>();
+		boolean changed = false;
+
+		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
+			Instruction inst = h.getInstruction();
+
+			if (inst instanceof StoreInstruction && !(inst instanceof ASTORE)) {
+				int index = ((StoreInstruction) inst).getIndex();
+
+				InstructionHandle prev = h.getPrev();
+				if (prev != null) {
+					Number val = getTypedConstant(prev, inst, cpgen);
+					if (val != null) {
+						constantVars.put(index, val);
+					}
+					else {
+						constantVars.remove(index);
+					}
+				}
+				else {
+					constantVars.remove(index);
+				}	
+			}
+			else if (inst instanceof LoadInstruction) {
+				int index = ((LoadInstruction) inst).getIndex();
+				if (constantVars.containsKey(index)) {
+					Number value = constantVars.get(index);
+					Instruction push = createTypedPush(cpgen, value);
+					if (push != null) {
+						h.setInstruction(push);
+						changed = true;
+					}
+				}					
+			}
+			;			
+		}
+		else if (inst instanceof ArithmeticInstruction) {
+
+			InstructionHandle prev1 = h.getPrev();
+			InstructionHandle prev2 = (prev1 != null) ? prev1.getPrev() : null;
+
+			if (prev1 != null && prev2 != null) {
+				Number v1 = getTypedConstant(prev1, prev1.getInstruction(), cpgen);
+				Number v2 = getTypedConstant(prev2, prev2.getInstruction(), cpgen);
+				if (v1 != null && v2 != null) {
+					Instruction fakeOp = new ArithmeticInstruction(inst.getOpcode()) {};
+					Number result = null;
+					if (v1 instanceof Integer && v2 instanceof Integer)
+						result = evalIntBinary(v1.intValue(), v2.intValue(), fakeOp);
+					else if (v1 instanceof Long && v2 instanceof Long)
+						result = evalLongBinary(v1.longValue(), v2.longValue(), fakeOp);
+					else if (v1 instanceof Float && v2 instanceof Float)
+						result = evalFloatBinary(v1.floatValue(), v2.floatValue(), fakeOp);
+					else if (v1 instanceof Double && v2 instanceof Double)
+						result = evalDoubleBinary(v1.doubleValue(), v2.doubleValue(), fakeOp);
+
+					if (result != null) {
+						Instruction push = createTypedPush(cpgen, result);
+						if (push != null) {
+							h.setInstruction(push);
+							il.delete(prev1, prev2);
+							changed = true;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		return changed;
 	}
 
 	// part4
