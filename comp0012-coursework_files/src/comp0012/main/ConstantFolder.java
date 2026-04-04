@@ -95,22 +95,22 @@ public class ConstantFolder {
 				changed = false;
 				rounds++;
 
-				// Part1: simple folding
+				// part1: simple folding
 				changed |= foldNumericConversions(il, cpgen);
 				changed |= foldNumeric(il, cpgen);
 
-				// Part2: constant variables across whole method
+				// part2: constant variables across whole method
 				changed |= propagateConstantVariables(il, cpgen);
 
-				// Part3: dynamic variables within intervals
+				// part3: dynamic variables within intervals
 				changed |= propagateDynamicVariables(il, cpgen);
 
-				// Part4: extra peephole
+				// part4: extra peephole
 				changed |= removeOverwrittenStores(il, cpgen);
 				changed |= removeDeadStores(il, cpgen);
 
 				if (rounds > 50)
-					break; // development safety net
+					break;
 			} while (changed);
 
 			mg.removeNOPs();
@@ -143,7 +143,6 @@ public class ConstantFolder {
 				if (!(conv instanceof ConversionInstruction))
 					continue;
 
-				// ---------- int -> (long/float/double) ----------
 				if (conv instanceof I2L) {
 					Integer v = getPushedIntConstant(h1, cpgen);
 					if (v != null && replace2WithPush(il, cpgen, h1, h2, (long) v.intValue())) {
@@ -164,7 +163,6 @@ public class ConstantFolder {
 					}
 				}
 
-				// ---------- long -> (int/float/double) ----------
 				else if (conv instanceof L2I) {
 					Long v = getPushedLongConstant(h1, cpgen);
 					if (v != null && replace2WithPush(il, cpgen, h1, h2, (int) v.longValue())) {
@@ -185,7 +183,6 @@ public class ConstantFolder {
 					}
 				}
 
-				// ---------- float -> (int/long/double) ----------
 				else if (conv instanceof F2I) {
 					Float v = getPushedFloatConstant(h1, cpgen);
 					if (v != null && replace2WithPush(il, cpgen, h1, h2, (int) v.floatValue())) {
@@ -206,7 +203,6 @@ public class ConstantFolder {
 					}
 				}
 
-				// ---------- double -> (int/long/float) ----------
 				else if (conv instanceof D2I) {
 					Double v = getPushedDoubleConstant(h1, cpgen);
 					if (v != null && replace2WithPush(il, cpgen, h1, h2, (int) v.doubleValue())) {
@@ -251,7 +247,6 @@ public class ConstantFolder {
 				if (!(op instanceof ArithmeticInstruction))
 					continue;
 
-				// Try int
 				Integer i1 = getPushedIntConstant(h1, cpgen);
 				Integer i2 = getPushedIntConstant(h2, cpgen);
 				if (i1 != null && i2 != null) {
@@ -265,7 +260,6 @@ public class ConstantFolder {
 					continue;
 				}
 
-				// Try long
 				Long l1 = getPushedLongConstant(h1, cpgen);
 				Long l2 = getPushedLongConstant(h2, cpgen);
 				if (l1 != null && l2 != null) {
@@ -279,7 +273,6 @@ public class ConstantFolder {
 					continue;
 				}
 
-				// Try float
 				Float f1 = getPushedFloatConstant(h1, cpgen);
 				Float f2 = getPushedFloatConstant(h2, cpgen);
 				if (f1 != null && f2 != null) {
@@ -293,7 +286,6 @@ public class ConstantFolder {
 					continue;
 				}
 
-				// Try double
 				Double d1 = getPushedDoubleConstant(h1, cpgen);
 				Double d2 = getPushedDoubleConstant(h2, cpgen);
 				if (d1 != null && d2 != null) {
@@ -349,7 +341,6 @@ public class ConstantFolder {
 		}
 	}
 
-	// int helpers
 	private Integer getPushedIntConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
 		if (inst instanceof ICONST)
@@ -386,7 +377,6 @@ public class ConstantFolder {
 		}
 	}
 
-	// long helpers
 	private Long getPushedLongConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
 		if (inst instanceof LCONST)
@@ -419,7 +409,6 @@ public class ConstantFolder {
 		}
 	}
 
-	// float helpers
 	private Float getPushedFloatConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
 		if (inst instanceof FCONST)
@@ -448,7 +437,6 @@ public class ConstantFolder {
 		}
 	}
 
-	// double helpers
 	private Double getPushedDoubleConstant(InstructionHandle h, ConstantPoolGen cpgen) {
 		Instruction inst = h.getInstruction();
 		if (inst instanceof DCONST)
@@ -469,7 +457,7 @@ public class ConstantFolder {
 			case Constants.DMUL:
 				return a * b;
 			case Constants.DDIV:
-				return a / b; // Infinity/NaN ok
+				return a / b;
 			case Constants.DREM:
 				return a % b;
 			default:
@@ -481,7 +469,6 @@ public class ConstantFolder {
 	private boolean propagateConstantVariables(InstructionList il, ConstantPoolGen cpgen) {
 		boolean changed = false;
 
-		// Filter the variables that are loaded only once
 		HashMap<Integer, Integer> storeCount = new HashMap<>();
 		HashMap<Integer, Number> constantVars = new HashMap<>();
 
@@ -523,7 +510,6 @@ public class ConstantFolder {
 		if (constantVars.isEmpty())
 			return false;
 
-		// Replace loads of these variables with their constant values
 		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
 			Instruction inst = h.getInstruction();
 
@@ -712,7 +698,6 @@ public class ConstantFolder {
 	private boolean removeDeadStores(InstructionList il, ConstantPoolGen cpgen) {
 		boolean changed = false;
 
-		// Pass 1: count numeric loads (and IINC) per local index
 		java.util.HashMap<Integer, Integer> loads = new java.util.HashMap<>();
 		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
 			Instruction inst = h.getInstruction();
@@ -725,8 +710,6 @@ public class ConstantFolder {
 				loads.put(idx, loads.getOrDefault(idx, 0) + 1);
 			}
 		}
-
-		// Pass 2: delete dead stores where the value producer is a single const push
 		for (InstructionHandle h = il.getStart(); h != null;) {
 			InstructionHandle cur = h;
 			h = h.getNext(); // advance before delete
@@ -807,7 +790,6 @@ public class ConstantFolder {
 		return false;
 	}
 
-	// write
 	public void write(String optimisedFilePath) {
 		this.optimize();
 
@@ -815,10 +797,10 @@ public class ConstantFolder {
 			FileOutputStream out = new FileOutputStream(new File(optimisedFilePath));
 			this.optimized.dump(out);
 		} catch (FileNotFoundException e) {
-			// Auto-generated catch block
+
 			e.printStackTrace();
 		} catch (IOException e) {
-			// Auto-generated catch block
+
 			e.printStackTrace();
 		}
 	}
