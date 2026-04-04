@@ -570,13 +570,24 @@ public class ConstantFolder {
 	// part3
 	private boolean propagateDynamicVariables(InstructionList il, ConstantPoolGen cpgen) {
 		Map<Integer, Number> constantVars = new HashMap<>();
+		HashMap<Integer, Boolean> iincVars = new HashMap<>();
 		boolean changed = false;
+
+		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
+			if (h.getInstruction() instanceof IINC) {
+				iincVars.put(((IINC) h.getInstruction()).getIndex(), true);
+			}
+		}
 
 		for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
 			Instruction inst = h.getInstruction();
 
 			if (inst instanceof StoreInstruction && !(inst instanceof ASTORE)) {
 				int index = ((StoreInstruction) inst).getIndex();
+
+				if (iincVars.containsKey(index)) {
+					continue;
+				}
 
 				InstructionHandle prev = h.getPrev();
 				if (prev != null) {
@@ -592,7 +603,7 @@ public class ConstantFolder {
 					constantVars.remove(index);
 				}	
 			}
-			else if (inst instanceof LoadInstruction) {
+			else if (inst instanceof LoadInstruction && !(inst instanceof ALOAD)) {
 				int index = ((LoadInstruction) inst).getIndex();
 				if (constantVars.containsKey(index)) {
 					Number value = constantVars.get(index);
@@ -603,35 +614,48 @@ public class ConstantFolder {
 					}
 				}					
 			}
-			;			
-		}
-		else if (inst instanceof ArithmeticInstruction) {
+			else if (inst instanceof IINC) {
+				int index = ((IINC) inst).getIndex();
+				constantVars.remove(index);
+			}
+			else if (inst instanceof ArithmeticInstruction) {
 
-			InstructionHandle prev1 = h.getPrev();
-			InstructionHandle prev2 = (prev1 != null) ? prev1.getPrev() : null;
+				InstructionHandle prev1 = h.getPrev();
+				InstructionHandle prev2 = (prev1 != null) ? prev1.getPrev() : null;
 
-			if (prev1 != null && prev2 != null) {
-				Number v1 = getTypedConstant(prev1, prev1.getInstruction(), cpgen);
-				Number v2 = getTypedConstant(prev2, prev2.getInstruction(), cpgen);
-				if (v1 != null && v2 != null) {
-					Instruction fakeOp = new ArithmeticInstruction(inst.getOpcode()) {};
-					Number result = null;
-					if (v1 instanceof Integer && v2 instanceof Integer)
-						result = evalIntBinary(v1.intValue(), v2.intValue(), fakeOp);
-					else if (v1 instanceof Long && v2 instanceof Long)
-						result = evalLongBinary(v1.longValue(), v2.longValue(), fakeOp);
-					else if (v1 instanceof Float && v2 instanceof Float)
-						result = evalFloatBinary(v1.floatValue(), v2.floatValue(), fakeOp);
-					else if (v1 instanceof Double && v2 instanceof Double)
-						result = evalDoubleBinary(v1.doubleValue(), v2.doubleValue(), fakeOp);
+				if (prev1 != null && prev2 != null) {
+					Number v1 = getTypedConstant(prev1, prev1.getInstruction(), cpgen);
+					Number v2 = getTypedConstant(prev2, prev2.getInstruction(), cpgen);
+					if (v1 != null && v2 != null) {
+	
+						Number result = null;
+						if (v1 instanceof Integer && v2 instanceof Integer)
+							result = evalIntBinary(v1.intValue(), v2.intValue(), inst);
+						else if (v1 instanceof Long && v2 instanceof Long)
+							result = evalLongBinary(v1.longValue(), v2.longValue(), inst);
+						else if (v1 instanceof Float && v2 instanceof Float)
+							result = evalFloatBinary(v1.floatValue(), v2.floatValue(), inst);
+						else if (v1 instanceof Double && v2 instanceof Double)
+							result = evalDoubleBinary(v1.doubleValue(), v2.doubleValue(), inst);
 
-					if (result != null) {
-						Instruction push = createTypedPush(cpgen, result);
-						if (push != null) {
-							h.setInstruction(push);
-							il.delete(prev1, prev2);
-							changed = true;
-							break;
+						if (result != null) {
+							Instruction push = createTypedPush(cpgen, result);
+							if (push != null) {
+								h.setInstruction(push);
+
+								try {
+									il.delete(prev2, prev1);
+								} catch (TargetLostException e) {
+									for (InstructionHandle target : e.getTargets()) {
+										for (InstructionTargeter targeter : target.getTargeters()) {
+											targeter.updateTarget(target, h);
+										}
+									}
+								}
+
+								changed = true;
+								break;
+							}
 						}
 					}
 				}
