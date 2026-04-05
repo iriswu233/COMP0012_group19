@@ -14,12 +14,27 @@ import org.apache.bcel.generic.DSTORE;
 import org.apache.bcel.generic.F2D;
 import org.apache.bcel.generic.F2I;
 import org.apache.bcel.generic.F2L;
+import org.apache.bcel.generic.FCMPG;
+import org.apache.bcel.generic.FCMPL;
 import org.apache.bcel.generic.FCONST;
 import org.apache.bcel.generic.FSTORE;
+import org.apache.bcel.generic.GOTO;
 import org.apache.bcel.generic.I2D;
 import org.apache.bcel.generic.I2F;
 import org.apache.bcel.generic.I2L;
 import org.apache.bcel.generic.ICONST;
+import org.apache.bcel.generic.IFEQ;
+import org.apache.bcel.generic.IFGE;
+import org.apache.bcel.generic.IFGT;
+import org.apache.bcel.generic.IFLE;
+import org.apache.bcel.generic.IFLT;
+import org.apache.bcel.generic.IFNE;
+import org.apache.bcel.generic.IF_ICMPEQ;
+import org.apache.bcel.generic.IF_ICMPGE;
+import org.apache.bcel.generic.IF_ICMPGT;
+import org.apache.bcel.generic.IF_ICMPLE;
+import org.apache.bcel.generic.IF_ICMPLT;
+import org.apache.bcel.generic.IF_ICMPNE;
 import org.apache.bcel.generic.IINC;
 import org.apache.bcel.generic.ISTORE;
 import org.apache.bcel.generic.Instruction;
@@ -27,6 +42,7 @@ import org.apache.bcel.generic.InstructionTargeter;
 import org.apache.bcel.generic.L2D;
 import org.apache.bcel.generic.L2F;
 import org.apache.bcel.generic.L2I;
+import org.apache.bcel.generic.LCMP;
 import org.apache.bcel.generic.LCONST;
 import org.apache.bcel.generic.LDC;
 import org.apache.bcel.generic.LDC2_W;
@@ -51,11 +67,14 @@ import org.apache.bcel.generic.ConversionInstruction;
 import org.apache.bcel.generic.D2F;
 import org.apache.bcel.generic.D2I;
 import org.apache.bcel.generic.D2L;
+import org.apache.bcel.generic.DCMPG;
+import org.apache.bcel.generic.DCMPL;
 import org.apache.bcel.generic.InstructionHandle;
 import org.apache.bcel.generic.InstructionList;
 import org.apache.bcel.util.InstructionFinder;
 import org.apache.bcel.generic.MethodGen;
 import org.apache.bcel.generic.TargetLostException;
+import org.apache.bcel.generic.NOP;
 
 public class ConstantFolder {
 	ClassParser parser = null;
@@ -108,6 +127,8 @@ public class ConstantFolder {
 				// part4: extra peephole
 				changed |= removeOverwrittenStores(il, cpgen);
 				changed |= removeDeadStores(il, cpgen);
+				changed |= foldConstantBranches(il, cpgen);
+				changed |= removeUnreachableCode(il);
 
 				if (rounds > 50)
 					break;
@@ -645,7 +666,7 @@ public class ConstantFolder {
 		return changed;
 	}
 
-	// part4
+	// part4-A
 	private boolean removeOverwrittenStores(InstructionList il, ConstantPoolGen cpgen) {
 		boolean changed = false;
 
@@ -807,6 +828,243 @@ public class ConstantFolder {
 			return (v instanceof Long) || (v instanceof Double);
 		}
 		return false;
+	}
+
+	// part4-B
+	private boolean foldConstantBranches(InstructionList il, ConstantPoolGen cpgen) {
+		boolean changed = false;
+		boolean onceChanged;
+
+		do {
+			onceChanged = false;
+
+			for (InstructionHandle h = il.getStart(); h != null; h = h.getNext()) {
+				Instruction inst = h.getInstruction();
+
+				if (inst instanceof LCMP) {
+					InstructionHandle h2 = h.getPrev();
+					InstructionHandle h1 = (h2 != null) ? h2.getPrev() : null;
+					if (h1 == null || h2 == null) continue;
+
+					Long a = getPushedLongConstant(h1, cpgen);
+					Long b = getPushedLongConstant(h2, cpgen);
+					if (a != null && b != null) {
+						int r = Long.compare(a.longValue(), b.longValue());
+						try {
+							h1.setInstruction(new PUSH(cpgen, r).getInstruction());
+							il.delete(h2, h); 
+						} catch (TargetLostException e) {
+							retargetLostTargets(e, h1);
+						}
+						onceChanged = changed = true;
+						break;
+					}
+				}
+
+				if (inst instanceof FCMPL || inst instanceof FCMPG) {
+					InstructionHandle h2 = h.getPrev();
+					InstructionHandle h1 = (h2 != null) ? h2.getPrev() : null;
+					if (h1 == null || h2 == null) continue;
+
+					Float a = getPushedFloatConstant(h1, cpgen);
+					Float b = getPushedFloatConstant(h2, cpgen);
+					if (a != null && b != null) {
+						int r;
+						if (Float.isNaN(a) || Float.isNaN(b)) {
+							r = (inst instanceof FCMPL) ? -1 : 1;
+						} else {
+							r = Float.compare(a, b);
+						}
+						try {
+							h1.setInstruction(new PUSH(cpgen, r).getInstruction());
+							il.delete(h2, h);
+						} catch (TargetLostException e) {
+							retargetLostTargets(e, h1);
+						}
+						onceChanged = changed = true;
+						break;
+					}
+				}
+
+				if (inst instanceof DCMPL || inst instanceof DCMPG) {
+					InstructionHandle h2 = h.getPrev();
+					InstructionHandle h1 = (h2 != null) ? h2.getPrev() : null;
+					if (h1 == null || h2 == null) continue;
+
+					Double a = getPushedDoubleConstant(h1, cpgen);
+					Double b = getPushedDoubleConstant(h2, cpgen);
+					if (a != null && b != null) {
+						int r;
+						if (Double.isNaN(a) || Double.isNaN(b)) {
+							r = (inst instanceof DCMPL) ? -1 : 1;
+						} else {
+							r = Double.compare(a, b);
+						}
+						try {
+							h1.setInstruction(new PUSH(cpgen, r).getInstruction());
+							il.delete(h2, h);
+						} catch (TargetLostException e) {
+							retargetLostTargets(e, h1);
+						}
+						onceChanged = changed = true;
+						break;
+					}
+				}
+
+				if (inst instanceof BranchInstruction && !(inst instanceof Select)) {
+
+					
+					if (inst instanceof IFEQ || inst instanceof IFNE ||
+						inst instanceof IFLT || inst instanceof IFLE ||
+						inst instanceof IFGT || inst instanceof IFGE) {
+
+						InstructionHandle prev = h.getPrev();
+						if (prev == null) continue;
+
+						Integer v = getPushedIntConstant(prev, cpgen);
+						if (v == null) continue;
+
+						int x = v.intValue();
+						boolean take;
+						if (inst instanceof IFEQ) take = (x == 0);
+						else if (inst instanceof IFNE) take = (x != 0);
+						else if (inst instanceof IFLT) take = (x < 0);
+						else if (inst instanceof IFLE) take = (x <= 0);
+						else if (inst instanceof IFGT) take = (x > 0);
+						else /* IFGE */ take = (x >= 0);
+
+						BranchInstruction br = (BranchInstruction) inst;
+
+						
+						InstructionHandle fallThrough = h.getNext();
+						if (fallThrough == null) continue; 
+
+						try {
+							
+							il.delete(prev);
+
+							if (take) {
+								h.setInstruction(new GOTO(br.getTarget()));
+							} else {
+								
+								h.setInstruction(new GOTO(fallThrough));
+							}
+						} catch (TargetLostException e) {
+							retargetLostTargets(e, h);
+						}
+
+						onceChanged = changed = true;
+						break;
+					}
+
+					
+					if (inst instanceof IF_ICMPEQ || inst instanceof IF_ICMPNE ||
+						inst instanceof IF_ICMPLT || inst instanceof IF_ICMPLE ||
+						inst instanceof IF_ICMPGT || inst instanceof IF_ICMPGE) {
+
+						InstructionHandle h2 = h.getPrev();
+						InstructionHandle h1 = (h2 != null) ? h2.getPrev() : null;
+						if (h1 == null || h2 == null) continue;
+
+						Integer a = getPushedIntConstant(h1, cpgen);
+						Integer b = getPushedIntConstant(h2, cpgen);
+						if (a == null || b == null) continue;
+
+						int x = a.intValue(), y = b.intValue();
+						boolean take;
+						if (inst instanceof IF_ICMPEQ) take = (x == y);
+						else if (inst instanceof IF_ICMPNE) take = (x != y);
+						else if (inst instanceof IF_ICMPLT) take = (x < y);
+						else if (inst instanceof IF_ICMPLE) take = (x <= y);
+						else if (inst instanceof IF_ICMPGT) take = (x > y);
+						else take = (x >= y);
+
+						BranchInstruction br = (BranchInstruction) inst;
+
+						InstructionHandle fallThrough = h.getNext();
+						if (fallThrough == null) continue;
+
+						try {
+							
+							il.delete(h1, h2);
+
+							if (take) {
+								h.setInstruction(new GOTO(br.getTarget()));
+							} else {
+								h.setInstruction(new GOTO(fallThrough));
+							}
+						} catch (TargetLostException e) {
+							retargetLostTargets(e, h);
+						}
+
+						onceChanged = changed = true;
+						break;
+					}
+				}
+
+				if (inst instanceof GOTO) {
+					GOTO g = (GOTO) inst;
+					InstructionHandle fallThrough = h.getNext();
+					if (fallThrough != null && g.getTarget() == fallThrough) {
+
+						if (isBranchTarget(h)) {
+							continue;
+						}
+
+						try {
+							il.delete(h); 
+						} catch (TargetLostException e) {
+						}
+
+						onceChanged = changed = true;
+						break;
+					}
+				}
+			}
+		} while (onceChanged);
+
+		return changed;
+	}
+
+	private boolean removeUnreachableCode(InstructionList il) {
+		boolean changed = false;
+
+		for (InstructionHandle h = il.getStart(); h != null; ) {
+			Instruction inst = h.getInstruction();
+
+			boolean terminates =
+				(inst instanceof GOTO) ||
+				inst.getOpcode() == Constants.IRETURN ||
+				inst.getOpcode() == Constants.LRETURN ||
+				inst.getOpcode() == Constants.FRETURN ||
+				inst.getOpcode() == Constants.DRETURN ||
+				inst.getOpcode() == Constants.ARETURN ||
+				inst.getOpcode() == Constants.RETURN ||
+				inst.getOpcode() == Constants.ATHROW;
+
+			if (!terminates) {
+				h = h.getNext();
+				continue;
+			}
+
+			InstructionHandle cur = h.getNext();
+			while (cur != null && !isBranchTarget(cur)) {
+				InstructionHandle next = cur.getNext();
+				try {
+					il.delete(cur);
+					changed = true;
+				} catch (TargetLostException e) {
+					InstructionHandle newTarget = (next != null) ? next : h;
+					retargetLostTargets(e, newTarget);
+					changed = true;
+				}
+				cur = next;
+			}
+
+			h = (cur != null) ? cur : null;
+		}
+
+		return changed;
 	}
 
 	public void write(String optimisedFilePath) {
